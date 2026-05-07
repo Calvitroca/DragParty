@@ -59,29 +59,28 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow get: if isOwner(userId);
-      allow create: if isEmailVerified() 
+      allow create: if isSignedIn() 
         && userId == request.auth.uid
         && isValidUser(incoming());
       
-      allow update: if isEmailVerified() 
-        && isOwner(userId)
+      allow update: if isOwner(userId)
         && isValidUser(incoming())
         && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
         && incoming().uid == existing().uid; // Immutable UID
     }
 
     match /registrations/{registrationId} {
-      allow get: if isEmailVerified() && (isOwner(existing().userId));
-      allow list: if isEmailVerified() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && (isOwner(existing().userId));
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
       
-      allow create: if isEmailVerified() 
+      allow create: if isSignedIn() 
         && isValidId(registrationId)
         && isValidRegistration(incoming())
         && exists(/databases/$(database)/documents/users/$(request.auth.uid)) // Master Gate
         && incoming().userId == request.auth.uid
         && incoming().createdAt == request.time;
 
-      allow update: if isEmailVerified()
+      allow update: if isSignedIn()
         && isOwner(existing().userId)
         && isValidRegistration(incoming())
         && (
@@ -94,7 +93,7 @@ service cloud.firestore {
         && existing().status != 'confirmed' // Terminal State Locking (Partially)
         && incoming().userId == existing().userId; // Immutable Owner
       
-      allow delete: if isEmailVerified() 
+      allow delete: if isSignedIn() 
         && isOwner(existing().userId)
         && existing().status != 'confirmed';
     }

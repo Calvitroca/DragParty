@@ -54,47 +54,70 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        await checkRegistration(u.uid);
+      try {
+        console.log("Auth state changed, user:", u?.uid);
+        setUser(u);
+        if (u) {
+          await checkRegistration(u.uid);
+          // If we have a user, consider the invitation "accepted" automatically
+          setAccepted(true);
+        }
+      } catch (err) {
+        console.error("Error in auth state change:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
   const checkRegistration = async (uid: string) => {
     try {
+      console.log("Checking registration for:", uid);
       const q = query(collection(db, 'registrations'), where('userId', '==', uid));
       const querySnapshot = await getDocs(q);
       if (!querySnapshot.empty) {
-        setRegistration(querySnapshot.docs[0].data());
+        const data = querySnapshot.docs[0].data();
+        console.log("Registration found:", data);
+        setRegistration(data);
+      } else {
+        console.log("No registration found for user");
+        setRegistration(null);
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'registrations');
+      console.error("Firestore query error:", error);
+      // We don't want to throw here to avoid blocking the main thread, 
+      // but we handle it via our custom error handler if it's a permission issue
+      if (error instanceof Error && error.message.includes('permission')) {
+        handleFirestoreError(error, OperationType.LIST, 'registrations');
+      }
     }
   };
 
   const handleLogin = async () => {
     try {
+      console.log("Initiating Google Login...");
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
+      console.log("Login successful, uid:", result.user.uid);
       
       const userRef = doc(db, 'users', result.user.uid);
       const userSnap = await getDoc(userRef);
       if (!userSnap.exists()) {
+        console.log("Creating new user profile...");
         await setDoc(userRef, {
           uid: result.user.uid,
           email: result.user.email,
           displayName: result.user.displayName,
           photoURL: result.user.photoURL,
           createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         });
       }
       
-      await checkRegistration(result.user.uid);
+      // onAuthStateChanged will handle the rest
     } catch (error) {
-      console.error(error);
+      console.error("Login Error:", error);
     }
   };
 
