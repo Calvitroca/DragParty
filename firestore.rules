@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitives & Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) 
+        && data.keys().size() <= 6
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 100
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('isAdmin' in data) || data.isAdmin is bool);
+    }
+
+    function isValidRegistration(data) {
+      return data.keys().hasAll(['userId', 'dragName', 'performanceMusic'])
+        && data.keys().size() <= 8
+        && data.userId == request.auth.uid
+        && data.dragName is string && data.dragName.size() >= 1 && data.dragName.size() <= 100
+        && data.performanceMusic is string && data.performanceMusic.size() >= 1 && data.performanceMusic.size() <= 200
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
+        && (!('status' in data) || (data.status in ['pending', 'confirmed', 'cancelled']))
+        && (!('createdAt' in data) || data.createdAt == request.time)
+        && (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    // --- Collections ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isEmailVerified() 
+        && userId == request.auth.uid
+        && isValidUser(incoming());
+      
+      allow update: if isEmailVerified() 
+        && isOwner(userId)
+        && isValidUser(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+        && incoming().uid == existing().uid; // Immutable UID
+    }
+
+    match /registrations/{registrationId} {
+      allow get: if isEmailVerified() && (isOwner(existing().userId));
+      allow list: if isEmailVerified() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isEmailVerified() 
+        && isValidId(registrationId)
+        && isValidRegistration(incoming())
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)) // Master Gate
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update: if isEmailVerified()
+        && isOwner(existing().userId)
+        && isValidRegistration(incoming())
+        && (
+          // Action: Update Basic Info
+          (incoming().diff(existing()).affectedKeys().hasOnly(['dragName', 'performanceMusic', 'photoUrl', 'updatedAt']))
+          || 
+          // Action: Cancel
+          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) && incoming().status == 'cancelled')
+        )
+        && existing().status != 'confirmed' // Terminal State Locking (Partially)
+        && incoming().userId == existing().userId; // Immutable Owner
+      
+      allow delete: if isEmailVerified() 
+        && isOwner(existing().userId)
+        && existing().status != 'confirmed';
+    }
+  }
+}

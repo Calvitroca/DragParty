@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoURL": { "type": "string" },
+        "isAdmin": { "type": "boolean" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Registration": {
+      "title": "Registration",
+      "description": "Drag Queen Party Registration",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "dragName": { "type": "string" },
+        "performanceMusic": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "dragName", "performanceMusic"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Users collection"
+    },
+    "registrations/{registrationId}": {
+      "schema": "Registration",
+      "description": "Party registrations collection"
+    }
+  }
+}
