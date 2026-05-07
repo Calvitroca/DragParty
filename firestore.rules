@@ -55,10 +55,14 @@ service cloud.firestore {
         && (!('updatedAt' in data) || data.updatedAt == request.time);
     }
 
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
     // --- Collections ---
 
     match /users/{userId} {
-      allow get: if isOwner(userId);
+      allow get: if isOwner(userId) || isAdmin();
       allow create: if isSignedIn() 
         && userId == request.auth.uid
         && isValidUser(incoming());
@@ -70,8 +74,8 @@ service cloud.firestore {
     }
 
     match /registrations/{registrationId} {
-      allow get: if isSignedIn() && (isOwner(existing().userId));
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && (isOwner(existing().userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       
       allow create: if isSignedIn() 
         && isValidId(registrationId)
@@ -81,7 +85,7 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
 
       allow update: if isSignedIn()
-        && isOwner(existing().userId)
+        && (isOwner(existing().userId) || isAdmin())
         && isValidRegistration(incoming())
         && (
           // Action: Update Basic Info
@@ -89,13 +93,16 @@ service cloud.firestore {
           || 
           // Action: Cancel
           (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) && incoming().status == 'cancelled')
+          ||
+          // Action: Admin Confirm/Status Change
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
         )
-        && existing().status != 'confirmed' // Terminal State Locking (Partially)
+        && (isAdmin() || existing().status != 'confirmed') // Admins can bypass terminal state
         && incoming().userId == existing().userId; // Immutable Owner
       
       allow delete: if isSignedIn() 
-        && isOwner(existing().userId)
-        && existing().status != 'confirmed';
+        && (isOwner(existing().userId) || isAdmin())
+        && (isAdmin() || existing().status != 'confirmed');
     }
   }
 }

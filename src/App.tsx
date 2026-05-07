@@ -51,6 +51,12 @@ export default function App() {
   const [registration, setRegistration] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
+
+  const isAdmin = isActuallyAdmin || user?.email === 'alonso@connectideas.com.mx';
+
+  const [isActuallyAdmin, setIsActuallyAdmin] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
@@ -59,8 +65,16 @@ export default function App() {
         setUser(u);
         if (u) {
           await checkRegistration(u.uid);
+          // Check if user is admin
+          const adminRef = doc(db, 'admins', u.uid);
+          const adminSnap = await getDoc(adminRef);
+          if (adminSnap.exists()) {
+            setIsActuallyAdmin(true);
+          }
           // If we have a user, consider the invitation "accepted" automatically
           setAccepted(true);
+        } else {
+          setIsActuallyAdmin(false);
         }
       } catch (err) {
         console.error("Error in auth state change:", err);
@@ -97,6 +111,7 @@ export default function App() {
   const handleLogin = async () => {
     try {
       console.log("Initiating Google Login...");
+      setAuthError(null);
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       console.log("Login successful, uid:", result.user.uid);
@@ -114,10 +129,23 @@ export default function App() {
           updatedAt: serverTimestamp(),
         });
       }
-      
-      // onAuthStateChanged will handle the rest
+
+      // Bootstrap: If it's you, make yourself admin in DB once
+      if (result.user.email === 'alonso@connectideas.com.mx') {
+        await setDoc(doc(db, 'admins', result.user.uid), {
+          email: result.user.email,
+          grantedAt: serverTimestamp()
+        }, { merge: true });
+      }
     } catch (error) {
       console.error("Login Error:", error);
+      if (error instanceof Error) {
+        if (error.message.includes('auth/unauthorized-domain')) {
+          setAuthError('Dominio no autorizado. Debes añadir tu URL de Vercel en la Consola de Firebase -> Authentication -> Settings.');
+        } else {
+          setAuthError(error.message);
+        }
+      }
     }
   };
 
@@ -175,9 +203,17 @@ export default function App() {
           GLAMOUR // GUTS
         </div>
         <div className="hidden md:flex gap-8 uppercase text-[10px] font-black tracking-[0.3em] text-white/40">
-          <span className="hover:text-neon-lime cursor-pointer transition-colors">Main Event</span>
+          <button className={cn("hover:text-neon-lime cursor-pointer transition-colors uppercase", !showAdmin && "text-neon-lime")} onClick={() => setShowAdmin(false)}>Main Event</button>
           <span className="hover:text-neon-lime cursor-pointer transition-colors">Performers</span>
           <span className="hover:text-neon-lime cursor-pointer transition-colors">Rules</span>
+          {isAdmin && (
+            <button 
+              className={cn("cursor-pointer transition-colors px-3 py-1 border border-neon-pink/20 uppercase", showAdmin ? "text-neon-pink bg-neon-pink/10 border-neon-pink" : "text-neon-pink hover:bg-neon-pink/5")}
+              onClick={() => setShowAdmin(true)}
+            >
+              ★ Admin Panel ★
+            </button>
+          )}
         </div>
         {user && (
           <button 
@@ -191,7 +227,17 @@ export default function App() {
 
       <main className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden">
         <AnimatePresence mode="wait">
-          {!accepted && !user && !registration ? (
+          {showAdmin && isAdmin ? (
+             <motion.div
+               key="admin-panel"
+               initial={{ opacity: 0, y: 20 }}
+               animate={{ opacity: 1, y: 0 }}
+               exit={{ opacity: 0, y: -20 }}
+               className="flex-1 overflow-y-auto p-6 lg:p-12"
+             >
+               <AdminPanel />
+             </motion.div>
+          ) : !accepted && !user && !registration ? (
             <motion.div
               key="hero"
               initial={{ opacity: 0 }}
@@ -290,6 +336,13 @@ export default function App() {
                                   <h3 className="text-2xl font-black uppercase italic">¿Quién eres, querida?</h3>
                                   <p className="text-white/40 text-[10px] uppercase font-bold tracking-widest leading-relaxed">Loggeate con Google para guardar tu progreso y registro en la nube de purpurina.</p>
                                 </div>
+
+                                {authError && (
+                                  <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-bold uppercase tracking-widest leading-relaxed text-center">
+                                    {authError}
+                                  </div>
+                                )}
+
                                 <button
                                   id="google-login"
                                   onClick={handleLogin}
@@ -483,5 +536,125 @@ function RegistrationForm({ onSubmit, submitting, initialValues }: { onSubmit: (
         * Al registrarte aceptas brillar más que las estrellas y dejarlo todo en la pista.
       </p>
     </form>
+  );
+}
+
+function AdminPanel() {
+  const [registrations, setRegistrations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchRegistrations();
+  }, []);
+
+  const fetchRegistrations = async () => {
+    try {
+      const q = query(collection(db, 'registrations'));
+      const querySnapshot = await getDocs(q);
+      const docs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRegistrations(docs);
+    } catch (error) {
+      console.error("Error fetching registrations:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateStatus = async (id: string, status: string) => {
+    try {
+      await setDoc(doc(db, 'registrations', id), { status, updatedAt: serverTimestamp() }, { merge: true });
+      setRegistrations(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `registrations/${id}`);
+    }
+  };
+
+  if (loading) return <Loader2 className="w-8 h-8 animate-spin mx-auto text-neon-pink" />;
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-12">
+      <div className="space-y-2">
+        <h2 className="text-5xl lg:text-7xl font-black uppercase italic tracking-tighter text-white">
+          Backstage <span className="text-neon-lime">Control</span>
+        </h2>
+        <p className="text-white/40 font-bold uppercase tracking-widest text-[10px]">
+          Gestiona a las reinas y confirma su asistencia. Total: {registrations.length}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        {registrations.length === 0 ? (
+          <div className="p-20 text-center border-2 border-dashed border-white/10 opacity-30">
+            <p className="text-2xl font-black italic uppercase">No hay reinas registradas aún...</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto border-2 border-white/5 bg-deep-purple">
+            <table className="w-full text-left font-bold text-xs uppercase tracking-tight">
+              <thead>
+                <tr className="border-b border-white/10 bg-white/5">
+                  <th className="p-6 text-neon-pink">Foto</th>
+                  <th className="p-6">Drag Name</th>
+                  <th className="p-6">Music / Performer</th>
+                  <th className="p-6">Estado</th>
+                  <th className="p-6 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {registrations.map((reg) => (
+                  <tr key={reg.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <td className="p-6">
+                      {reg.photoUrl ? (
+                         <img src={reg.photoUrl} alt={reg.dragName} className="w-12 h-12 object-cover border-2 border-neon-pink" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-12 h-12 bg-white/5 flex items-center justify-center border-2 border-white/10">
+                          <Camera className="w-4 h-4 opacity-20" />
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-6">
+                      <div className="flex flex-col">
+                        <span className="text-lg font-black italic text-white leading-tight">{reg.dragName}</span>
+                        <span className="text-[9px] text-white/30 truncate max-w-[150px]">{reg.id}</span>
+                      </div>
+                    </td>
+                    <td className="p-6">
+                      <div className="flex items-center gap-2">
+                         <Music className="w-3 h-3 text-neon-lime" />
+                         <span>{reg.performanceMusic}</span>
+                      </div>
+                    </td>
+                    <td className="p-6">
+                      <span className={cn(
+                        "px-2 py-1 text-[9px] font-black italic rounded-sm",
+                        reg.status === 'confirmed' ? "bg-neon-lime text-black" : "bg-white/10 text-white/60"
+                      )}>
+                        {reg.status}
+                      </span>
+                    </td>
+                    <td className="p-6 text-right space-x-2">
+                       {reg.status !== 'confirmed' && (
+                         <button 
+                           onClick={() => updateStatus(reg.id, 'confirmed')}
+                           className="bg-neon-lime text-black px-4 py-2 hover:bg-white transition-colors"
+                         >
+                           Confirmar
+                         </button>
+                       )}
+                       <button 
+                         onClick={() => { if(confirm('¿Seguro que quieres eliminar a esta loba?')) updateStatus(reg.id, 'cancelled') }}
+                         className="bg-red-500/10 text-red-500 px-4 py-2 hover:bg-red-500 hover:text-white transition-colors"
+                       >
+                         Rechazar
+                       </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+        }
+      </div>
+    </div>
   );
 }
